@@ -120,7 +120,7 @@ func download(image string) error {
 // }
 
 func run(command string, args []string, env []string) {
-
+	fmt.Println("Running command in a new container:", command, args)
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, command)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -136,30 +136,23 @@ func run(command string, args []string, env []string) {
 
 func child(command string, args []string) {
 	fmt.Printf("Running %v as user %d in process %d\n", os.Args[2:], os.Getuid(), os.Getpid())
-	fmt.Printf("Command: %s, Args: %v\n", command, args)
-	// cmd := exec.Command("bin/sh", args...)
-	// cmd.Stdin = os.Stdin
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
-	// cmd.Env = []string{"PATH=/bin"}
 
 	must(syscall.Sethostname([]byte("container")))
 	must(syscall.Chroot("rootfs"))
 	must(syscall.Chdir("/"))
 	must(os.MkdirAll("/proc", 0555))
 	must(syscall.Mount("proc", "/proc", "proc", 0, ""))
+	defer syscall.Unmount("/proc", 0)
 
-	// fmt.Println("Env:", cmd.Env)
+	fmt.Println("Env:", os.Environ())
 	commandPath, err := exec.LookPath(command)
 	if err != nil {
 		panic(err)
 	}
 
 	command = commandPath
-	must(os.Chmod(command, 0755))
-
-	defer syscall.Unmount("/proc", 0)
-
+	must(os.Chmod(command, 0777))
+	fmt.Printf("Command: %s, Args: %v\n", command, args)
 	must(syscall.Exec(command, append([]string{command}, args...), os.Environ()))
 }
 

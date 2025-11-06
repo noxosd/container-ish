@@ -144,6 +144,7 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 				if err != nil {
 					log.Fatalf("ExtractTarGz: Create() failed: %s", err.Error())
 				}
+				os.Chmod(fp, header.FileInfo().Mode().Perm())
 				if _, err := io.Copy(outFile, tarReader); err != nil {
 					log.Fatalf("ExtractTarGz: Copy() failed: %s", err.Error())
 				}
@@ -154,8 +155,8 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 					log.Fatalf("ExtractTarGz: Link() failed: %s", err.Error())
 				}
 			case tar.TypeSymlink:
-				linkTarget := filepath.Join(dir, header.Linkname)
-				if err := os.Symlink(linkTarget, fp); err != nil {
+				fmt.Printf("Creating symlink %s -> %s\n", header.Name, header.Linkname)
+				if err := os.Symlink(header.Linkname, fp); err != nil {
 					log.Fatalf("ExtractTarGz: Symlink() failed: %s", err.Error())
 				}
 			default:
