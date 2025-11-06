@@ -4,11 +4,13 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 func getToken(image string) (*Token, error) {
@@ -73,13 +75,14 @@ func getConfig(image string, manifest *PlatfromManifest, t Token) (*Config, erro
 
 	configBytes, err := getBytes(client, baseURL+"/blobs/"+config.Digest, t)
 	if err != nil {
-		return nil, fmt.Errorf("Got error getting config: %w", err)
+		return nil, fmt.Errorf("got error getting config: %w", err)
 	}
 
+	fmt.Println(string(configBytes))
 	configStruct := &Config{}
 	err = json.Unmarshal(configBytes, configStruct)
 	if err != nil {
-		return nil, fmt.Errorf("Got error unmarshaling config: %w", err)
+		return nil, fmt.Errorf("got error unmarshaling config: %w", err)
 	}
 	return configStruct, nil
 }
@@ -88,6 +91,19 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 	baseURL := "https://registry-1.docker.io/v2/library/" + image
 	client := &http.Client{}
 	layers := manifest.Layers
+
+	dir := "rootfs/"
+	// if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	// 	err = os.RemoveAll(dir)
+	// 	if err != nil {
+	// 		log.Fatalf("ExtractTarGz: RemoveAll() failed: %s", err.Error())
+	// 	}
+	// 	err = os.MkdirAll(dir, 0755)
+	// 	if err != nil {
+	// 		log.Fatalf("ExtractTarGz: MkdirAll() failed: %s", err.Error())
+	// 	}
+	// }
+
 	for _, layer := range layers {
 		fmt.Printf("Layer: %v\n", layer)
 		resp, err := getResponse(client, baseURL+"/blobs/"+layer.Digest, t)
@@ -114,14 +130,17 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 				log.Fatalf("ExtractTarGz: Next() failed: %s", err.Error())
 			}
 
-			dir := "./rootfs/"
+			fp := filepath.Join(dir, header.Name)
+			fmt.Printf("Extracting %s of type %c\n", fp, header.Typeflag)
 			switch header.Typeflag {
 			case tar.TypeDir:
-				if err := os.Mkdir(dir+header.Name, 0755); err != nil {
-					log.Fatalf("ExtractTarGz: Mkdir() failed: %s", err.Error())
+				if err := os.Mkdir(fp, 0755); err != nil {
+					if !errors.Is(err, os.ErrExist) {
+						log.Fatalf("ExtractTarGz: Mkdir() failed: %s", err.Error())
+					}
 				}
 			case tar.TypeReg:
-				outFile, err := os.Create(dir + header.Name)
+				outFile, err := os.Create(fp)
 				if err != nil {
 					log.Fatalf("ExtractTarGz: Create() failed: %s", err.Error())
 				}
@@ -129,7 +148,16 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 					log.Fatalf("ExtractTarGz: Copy() failed: %s", err.Error())
 				}
 				outFile.Close()
-
+			case tar.TypeLink:
+				linkTarget := filepath.Join(dir, header.Linkname)
+				if err := os.Link(linkTarget, fp); err != nil {
+					log.Fatalf("ExtractTarGz: Link() failed: %s", err.Error())
+				}
+			case tar.TypeSymlink:
+				linkTarget := filepath.Join(dir, header.Linkname)
+				if err := os.Symlink(linkTarget, fp); err != nil {
+					log.Fatalf("ExtractTarGz: Symlink() failed: %s", err.Error())
+				}
 			default:
 				log.Fatalf(
 					"ExtractTarGz: uknown type: %s in %s",

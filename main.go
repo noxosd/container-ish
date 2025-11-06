@@ -44,6 +44,7 @@ type PlatfromManifest struct {
 type Config struct {
 	Config struct {
 		CMD []string `json:"Cmd"`
+		Env []string `json:"Env"`
 	} `json:"config"`
 }
 
@@ -62,11 +63,11 @@ func main() {
 	case "run":
 		command := os.Args[2]
 		args := os.Args[3:]
-		run(command, args...)
+		run(command, args, os.Environ())
 	case "child":
 		command := os.Args[2]
 		args := os.Args[3:]
-		child(command, args...)
+		child(command, args)
 	case "download":
 		image := os.Args[2]
 		err := download(image)
@@ -103,9 +104,10 @@ func download(image string) error {
 
 	cmd := config.Config.CMD[0]
 	args := config.Config.CMD[1:]
+	env := config.Config.Env
 	fmt.Printf("Downloaded image %s with command: %s %v\n", image, cmd, args)
 
-	run(cmd, args...)
+	run(cmd, args, env)
 	return nil
 }
 
@@ -117,12 +119,13 @@ func download(image string) error {
 // 	return nil
 // }
 
-func run(command string, args ...string) {
+func run(command string, args []string, env []string) {
 
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, command)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = env
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS,
@@ -131,20 +134,31 @@ func run(command string, args ...string) {
 	must(cmd.Run())
 }
 
-func child(command string, args ...string) {
+func child(command string, args []string) {
 	fmt.Printf("Running %v as user %d in process %d\n", os.Args[2:], os.Getuid(), os.Getpid())
 	fmt.Printf("Command: %s, Args: %v\n", command, args)
-	cmd := exec.Command(command, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// cmd := exec.Command("bin/sh", args...)
+	// cmd.Stdin = os.Stdin
+	// cmd.Stdout = os.Stdout
+	// cmd.Stderr = os.Stderr
+	// cmd.Env = []string{"PATH=/bin"}
 
 	must(syscall.Sethostname([]byte("container")))
 	must(syscall.Chroot("rootfs"))
 	must(syscall.Chdir("/"))
 	must(os.MkdirAll("/proc", 0555))
 	must(syscall.Mount("proc", "/proc", "proc", 0, ""))
-	must(os.Chmod(command, 0777))
+
+	// fmt.Println("Env:", cmd.Env)
+	commandPath, err := exec.LookPath(command)
+	if err != nil {
+		panic(err)
+	}
+
+	command = commandPath
+	must(os.Chmod(command, 0755))
+
+	defer syscall.Unmount("/proc", 0)
 
 	must(syscall.Exec(command, append([]string{command}, args...), os.Environ()))
 }
