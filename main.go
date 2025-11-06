@@ -1,9 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -108,28 +111,90 @@ func download() {
 		}
 	}
 
-	manifestBytes, _, err := get(client, "https://registry-1.docker.io/v2/library/hello-world/manifests/"+manifestDigest, *t)
+	manifestBytes, _, err := getBytes(client, "https://registry-1.docker.io/v2/library/hello-world/manifests/"+manifestDigest, *t)
 	if err != nil {
 		panic(err)
 	}
 	platfromManifest := PlatfromManifest{}
-	err = parseDockerJSON(&platfromManifest, manifestBytes)
+	err = json.Unmarshal(manifestBytes, &platfromManifest)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Printf("Platform-specific manifest: %v\n", platfromManifest)
-}
+	layers := platfromManifest.Layers
+	for _, layer := range layers {
+		fmt.Printf("Layer: %v\n", layer)
+		layerReader, resp, err := getStream(client, "https://registry-1.docker.io/v2/library/hello-world/blobs/"+layer.Digest, *t)
+		if err != nil {
+			panic(err)
+		}
 
-func parseDockerJSON[T any](t *T, b []byte) error {
-	err := json.Unmarshal(b, t)
-	if err != nil {
-		return err
+		fmt.Printf("Downloaded layer of size: %d\n", resp.ContentLength)
+		uncomressedStream, err := gzip.NewReader(layerReader)
+		if err != nil {
+			panic(err)
+		}
+		tarReader := tar.NewReader(uncomressedStream)
+		for {
+			header, err := tarReader.Next()
+
+			if err == io.EOF {
+				break
+			}
+
+			if err != nil {
+				log.Fatalf("ExtractTarGz: Next() failed: %s", err.Error())
+			}
+
+			dir := "./rootfs/"
+			switch header.Typeflag {
+			case tar.TypeDir:
+				if err := os.Mkdir(dir+header.Name, 0755); err != nil {
+					log.Fatalf("ExtractTarGz: Mkdir() failed: %s", err.Error())
+				}
+			case tar.TypeReg:
+				outFile, err := os.Create(dir + header.Name)
+				if err != nil {
+					log.Fatalf("ExtractTarGz: Create() failed: %s", err.Error())
+				}
+				if _, err := io.Copy(outFile, tarReader); err != nil {
+					log.Fatalf("ExtractTarGz: Copy() failed: %s", err.Error())
+				}
+				outFile.Close()
+
+			default:
+				log.Fatalf(
+					"ExtractTarGz: uknown type: %s in %s",
+					header.Typeflag,
+					header.Name)
+			}
+		}
+
 	}
-	return nil
+
 }
 
-func get(client *http.Client, url string, t Token) ([]byte, http.Response, error) {
+// func parseDockerJSON[T any](t *T, b []byte) error {
+// 	err := json.Unmarshal(b, t)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }
+
+func getBytes(client *http.Client, url string, t Token) ([]byte, http.Response, error) {
+	respBody, resp, err := getStream(client, url, t)
+	if err != nil {
+		return nil, http.Response{}, err
+	}
+	r, err := io.ReadAll(respBody)
+	if err != nil {
+		return nil, http.Response{}, err
+	}
+	return r, resp, nil
+}
+
+func getStream(client *http.Client, url string, t Token) (io.Reader, http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, http.Response{}, err
@@ -139,11 +204,7 @@ func get(client *http.Client, url string, t Token) ([]byte, http.Response, error
 	if err != nil {
 		return nil, http.Response{}, err
 	}
-	r, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, http.Response{}, err
-	}
-	return r, *resp, nil
+	return resp.Body, *resp, nil
 }
 func run() {
 	if len(os.Args) < 3 {
