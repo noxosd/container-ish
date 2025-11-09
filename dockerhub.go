@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 func getToken(image string) (*Token, error) {
@@ -21,14 +22,14 @@ func getToken(image string) (*Token, error) {
 	}
 	defer resp.Body.Close()
 
-	fmt.Printf("Response status: %s\n", resp.Status)
+	// fmt.Printf("Response status: %s\n", resp.Status)
 	// Further processing of the response can be done here
 	t := &Token{}
 	err = json.NewDecoder(resp.Body).Decode(t)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Got a token: %v\n", t.Token)
+	// fmt.Printf("Got a token: %v\n", t.Token)
 	return t, nil
 }
 
@@ -40,7 +41,7 @@ func getManifest(image string, t Token) (*PlatfromManifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error getting manifest index: %w", err)
 	}
-	fmt.Println(string(manifestIndex))
+	// fmt.Println(string(manifestIndex))
 	index := &Index{}
 	err = json.Unmarshal(manifestIndex, index)
 	if err != nil {
@@ -61,7 +62,7 @@ func getManifest(image string, t Token) (*PlatfromManifest, error) {
 	platfromManifest := PlatfromManifest{}
 	err = json.Unmarshal(manifestBytes, &platfromManifest)
 	if err != nil {
-		fmt.Println(string(manifestBytes))
+		// fmt.Println(string(manifestBytes))
 		return nil, fmt.Errorf("error unmarshaling platform manifest: %w", err)
 	}
 
@@ -78,7 +79,7 @@ func getConfig(image string, manifest *PlatfromManifest, t Token) (*Config, erro
 		return nil, fmt.Errorf("got error getting config: %w", err)
 	}
 
-	fmt.Println(string(configBytes))
+	// fmt.Println(string(configBytes))
 	configStruct := &Config{}
 	err = json.Unmarshal(configBytes, configStruct)
 	if err != nil {
@@ -93,17 +94,43 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 	layers := manifest.Layers
 
 	rootfsDir := "rootfs/"
+	tmpDir := os.TempDir()
+	defer os.RemoveAll(tmpDir)
+
+	var wg sync.WaitGroup
 
 	for _, layer := range layers {
-		fmt.Printf("Layer: %v\n", layer)
-		resp, err := getResponse(client, baseURL+"/blobs/"+layer.Digest, t)
+		wg.Add(1)
+
+		go func(l Layer) {
+			defer wg.Done()
+			fmt.Printf("Layer: %v\n", l)
+			resp, err := getResponse(client, baseURL+"/blobs/"+l.Digest, t)
+			if err != nil {
+				panic(err)
+			}
+			fmt.Printf("Downloaded layer of size: %d\n", resp.ContentLength)
+			layerReader := resp.Body
+			defer layerReader.Close()
+
+			tmpFile := filepath.Join(tmpDir, l.Digest+".tar.gz")
+			out, err := os.Create(tmpFile)
+			if err != nil {
+				panic(err)
+			}
+			_, err = io.Copy(out, layerReader)
+			if err != nil {
+				panic(err)
+			}
+		}(layer)
+	}
+	wg.Wait()
+	for _, layer := range layers {
+		layerFile := filepath.Join(tmpDir, layer.Digest+".tar.gz")
+		layerReader, err := os.Open(layerFile)
 		if err != nil {
 			panic(err)
 		}
-
-		fmt.Printf("Downloaded layer of size: %d\n", resp.ContentLength)
-		layerReader := resp.Body
-		defer layerReader.Close()
 		uncomressedStream, err := gzip.NewReader(layerReader)
 		if err != nil {
 			panic(err)
@@ -145,7 +172,7 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 					log.Fatalf("ExtractTarGz: Link() failed: %s", err.Error())
 				}
 			case tar.TypeSymlink:
-				fmt.Printf("Creating symlink %s -> %s\n", header.Name, header.Linkname)
+				// fmt.Printf("Creating symlink %s -> %s\n", header.Name, header.Linkname)
 				if err := os.Symlink(header.Linkname, fp); err != nil {
 					log.Fatalf("ExtractTarGz: Symlink() failed: %s", err.Error())
 				}
