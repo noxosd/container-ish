@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 )
 
@@ -148,7 +149,16 @@ func run(command string, args []string, env []string) {
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS,
+		Setsid:     true,
 	}
+
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, os.Interrupt)
+
+	go func() {
+		s := <-sigc
+		cmd.Process.Signal(s)
+	}()
 
 	must(cmd.Run())
 	fmt.Println("Container stopped")

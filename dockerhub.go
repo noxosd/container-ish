@@ -92,17 +92,7 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 	client := &http.Client{}
 	layers := manifest.Layers
 
-	dir := "rootfs/"
-	// if _, err := os.Stat(dir); !os.IsNotExist(err) {
-	// 	err = os.RemoveAll(dir)
-	// 	if err != nil {
-	// 		log.Fatalf("ExtractTarGz: RemoveAll() failed: %s", err.Error())
-	// 	}
-	// 	err = os.MkdirAll(dir, 0755)
-	// 	if err != nil {
-	// 		log.Fatalf("ExtractTarGz: MkdirAll() failed: %s", err.Error())
-	// 	}
-	// }
+	rootfsDir := "rootfs/"
 
 	for _, layer := range layers {
 		fmt.Printf("Layer: %v\n", layer)
@@ -130,7 +120,7 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 				log.Fatalf("ExtractTarGz: Next() failed: %s", err.Error())
 			}
 
-			fp := filepath.Join(dir, header.Name)
+			fp := filepath.Join(rootfsDir, header.Name)
 			fmt.Printf("Extracting %s of type %c\n", fp, header.Typeflag)
 			switch header.Typeflag {
 			case tar.TypeDir:
@@ -150,7 +140,7 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 				}
 				outFile.Close()
 			case tar.TypeLink:
-				linkTarget := filepath.Join(dir, header.Linkname)
+				linkTarget := filepath.Join(rootfsDir, header.Linkname)
 				if err := os.Link(linkTarget, fp); err != nil {
 					log.Fatalf("ExtractTarGz: Link() failed: %s", err.Error())
 				}
