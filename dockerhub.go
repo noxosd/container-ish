@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -148,7 +149,18 @@ func getLayers(image string, manifest *PlatfromManifest, t Token) error {
 			}
 
 			fp := filepath.Join(rootfsDir, header.Name)
-			fmt.Printf("Extracting %s of type %c\n", fp, header.Typeflag)
+			if strings.Contains(header.Name, ".wh.") {
+				fmt.Printf("We've got a whiteout file: %s\n", header.Name)
+				whFile := strings.ReplaceAll(header.Name, ".wh.", "")
+				whPath := filepath.Join(rootfsDir, whFile)
+				err := os.RemoveAll(whPath)
+				if err != nil {
+					log.Fatalf("Failed to remove whiteout target: %s, %s", whPath, err.Error())
+				}
+				fmt.Printf("Removed whiteout target: %s\n", whPath)
+				continue
+			}
+
 			switch header.Typeflag {
 			case tar.TypeDir:
 				if err := os.Mkdir(fp, 0755); err != nil {
