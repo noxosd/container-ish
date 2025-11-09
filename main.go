@@ -80,7 +80,25 @@ func main() {
 	}
 }
 
+func cleanup() {
+	err := syscall.Unmount("rootfs/proc", 0)
+	if err != nil {
+		fmt.Printf("Error unmounting /proc: %v\n", err)
+	}
+	err = os.RemoveAll("rootfs")
+	if err != nil {
+		fmt.Printf("Error cleaning up rootfs: %v\n", err)
+	}
+
+}
+
 func download(image string) error {
+
+	err := os.MkdirAll("rootfs", 0755)
+	if err != nil {
+		return fmt.Errorf("got error creating rootfs dir: %w", err)
+	}
+
 	t, err := getToken(image)
 	if err != nil {
 		return fmt.Errorf("got error getting a token: %w", err)
@@ -108,6 +126,7 @@ func download(image string) error {
 	fmt.Printf("Downloaded image %s with command: %s %v\n", image, cmd, args)
 
 	run(cmd, args, env)
+	cleanup()
 	return nil
 }
 
@@ -132,6 +151,7 @@ func run(command string, args []string, env []string) {
 	}
 
 	must(cmd.Run())
+	fmt.Println("Container stopped")
 }
 
 func child(command string, args []string) {
