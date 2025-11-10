@@ -44,8 +44,9 @@ type PlatfromManifest struct {
 
 type Config struct {
 	Config struct {
-		CMD []string `json:"Cmd"`
-		Env []string `json:"Env"`
+		CMD        []string `json:"Cmd"`
+		Env        []string `json:"Env"`
+		Entrypoint []string `json:"Entrypoint"`
 	} `json:"config"`
 }
 
@@ -100,6 +101,13 @@ func download(image string) error {
 		return fmt.Errorf("got error creating rootfs dir: %w", err)
 	}
 
+	err = os.MkdirAll("layers", 0755)
+	if err != nil {
+		if !os.IsExist(err) {
+			return fmt.Errorf("got error creating layers dir: %w", err)
+		}
+	}
+
 	t, err := getToken(image)
 	if err != nil {
 		return fmt.Errorf("got error getting a token: %w", err)
@@ -121,11 +129,21 @@ func download(image string) error {
 		return fmt.Errorf("got error getting layers: %w", err)
 	}
 
-	cmd := config.Config.CMD[0]
-	args := config.Config.CMD[1:]
+	cmd := ""
+	var args []string
 	env := config.Config.Env
+	entrypoint := config.Config.Entrypoint
+	if len(entrypoint) > 0 {
+		cmd = entrypoint[0]
+		args = config.Config.CMD
+		fmt.Println("ARGS:", args)
+	} else {
+		cmd = config.Config.CMD[0]
+		args = config.Config.CMD[1:]
+	}
 	fmt.Printf("Downloaded image %s with command: %s %v\n", image, cmd, args)
 
+	buildRootFS(platfromManifest)
 	run(cmd, args, env)
 	cleanup()
 	return nil
@@ -141,7 +159,8 @@ func download(image string) error {
 
 func run(command string, args []string, env []string) {
 	fmt.Println("Running command in a new container:", command, args)
-	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, command)...)
+	fullCommand := append([]string{command}, args...)
+	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, fullCommand...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -160,7 +179,11 @@ func run(command string, args []string, env []string) {
 		cmd.Process.Signal(s)
 	}()
 
-	must(cmd.Run())
+	fmt.Println("============STARRTING CONTAINER============")
+	err := cmd.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error running command: %v\n", err)
+	}
 	fmt.Println("Container stopped")
 }
 
