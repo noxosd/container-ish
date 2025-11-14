@@ -6,6 +6,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+
+	"github.com/vishvananda/netlink"
+	"github.com/vishvananda/netns"
 )
 
 type Token struct {
@@ -94,6 +97,60 @@ func cleanup() {
 
 }
 
+func addNetworkInterfaces(pid int) error {
+	// variable names are incorrect
+	containerVeth := "container-host"
+	hostVeth := "container-veth"
+
+	vethLinkAttrs := netlink.NewLinkAttrs()
+	vethLinkAttrs.Name = hostVeth
+
+	veth := &netlink.Veth{
+		LinkAttrs: vethLinkAttrs,
+		PeerName:  containerVeth,
+	}
+
+	if err := netlink.LinkAdd(veth); err != nil {
+		return fmt.Errorf("failed to create veth pair: %w", err)
+	}
+
+	if err := netlink.LinkSetNsPid(veth, pid); err != nil {
+		return fmt.Errorf("failed to set veth namespace: %w", err)
+	}
+
+	ns, err := netns.GetFromPid(pid)
+	if err != nil {
+		return fmt.Errorf("failed to get netns handle: %w", err)
+	}
+	defer ns.Close()
+
+	hostAddr, _ := netlink.ParseAddr("10.0.0.1/24")
+	containerAddr, _ := netlink.ParseAddr("10.0.0.2/24")
+
+	l, _ := netlink.LinkByName(containerVeth)
+	netlink.AddrAdd(l, hostAddr)
+	netlink.LinkSetUp(l)
+
+	// Setting up container side of the veth
+	handle, err := netlink.NewHandleAt(ns)
+	if err != nil {
+		return fmt.Errorf("failed to get netlink handle in container netns: %w", err)
+	}
+	defer handle.Close()
+
+	link, err := handle.LinkByName(hostVeth)
+	if err != nil {
+		return fmt.Errorf("failed to get container veth link: %w", err)
+	}
+	if err := handle.LinkSetUp(link); err != nil {
+		return fmt.Errorf("failed to set container veth up: %w", err)
+	}
+
+	handle.AddrAdd(link, containerAddr)
+
+	return nil
+}
+
 func download(image string) error {
 
 	err := os.MkdirAll("rootfs", 0755)
@@ -167,7 +224,7 @@ func run(command string, args []string, env []string) {
 	cmd.Env = env
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS,
+		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET,
 		Setsid:     true,
 	}
 
@@ -180,10 +237,24 @@ func run(command string, args []string, env []string) {
 	}()
 
 	fmt.Println("============STARRTING CONTAINER============")
-	err := cmd.Run()
+	err := cmd.Start()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running command: %v\n", err)
+		os.Exit(-1)
 	}
+
+	pid := cmd.Process.Pid
+	err = addNetworkInterfaces(pid)
+	if err != nil {
+		fmt.Printf("Error adding network interfaces: %v\n", err)
+		os.Exit(-1)
+	}
+	err = cmd.Wait()
+	if err != nil {
+		fmt.Printf("Command executed unsucsessfully: %s\n", err)
+		os.Exit(-1)
+	}
+	fmt.Printf("Container PID: %d\n", pid)
 	fmt.Println("Container stopped")
 }
 
