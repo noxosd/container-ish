@@ -172,13 +172,18 @@ func run(command string, args []string, env []string) {
 	cmd.Env = env
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET,
+		Cloneflags: syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNET | syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
 		Setsid:     true,
+		UidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Geteuid(), Size: 1},
+		},
+		GidMappings: []syscall.SysProcIDMap{
+			{ContainerID: 0, HostID: os.Getgid(), Size: 1},
+		},
+		GidMappingsEnableSetgroups: false,
 	}
-
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, os.Interrupt)
-
 	go func() {
 		s := <-sigc
 		cmd.Process.Signal(s)
@@ -197,6 +202,7 @@ func run(command string, args []string, env []string) {
 		fmt.Printf("Error adding network interfaces: %v\n", err)
 		os.Exit(-1)
 	}
+
 	err = cmd.Wait()
 	if err != nil {
 		fmt.Printf("Command executed unsucsessfully: %s\n", err)
@@ -208,7 +214,6 @@ func run(command string, args []string, env []string) {
 
 func child(command string, args []string) {
 	fmt.Printf("Running %v as user %d in process %d\n", os.Args[2:], os.Getuid(), os.Getpid())
-
 	must(syscall.Sethostname([]byte("container")))
 	must(syscall.Chroot("rootfs"))
 	must(syscall.Chdir("/"))
@@ -223,7 +228,7 @@ func child(command string, args []string) {
 	}
 
 	command = commandPath
-	must(os.Chmod(command, 0777))
+	// must(os.Chmod(command, 0777))
 	fmt.Printf("Command: %s, Args: %v\n", command, args)
 	must(syscall.Exec(command, append([]string{command}, args...), os.Environ()))
 }
